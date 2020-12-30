@@ -1,4 +1,5 @@
 import argparse
+import poptorch
 from pathlib import Path
 
 from PIL import Image
@@ -41,6 +42,7 @@ def main(save_path='transferred_image.png'):
     # Using the second cpu
     inference = Inference(
         config, args.device, args.model_path)
+    inference.solver.G = poptorch.inferenceModel(inference.solver.G)
     postprocess = PostProcess(config)
 
     source = Image.open(args.source_path).convert("RGB")

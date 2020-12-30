@@ -64,7 +64,7 @@ class NONLocalBlock2D(nn.Module):
         g_source = source.view(batch_size, 1, -1)  # (N, C, H*W)
         g_source = g_source.permute(0, 2, 1)  # (N, H*W, C)
 
-        y = torch.bmm(weight.to_dense(), g_source)
+        y = torch.bmm(weight, g_source)
         y = y.permute(0, 2, 1).contiguous()  # (N, C, H*W)
         y = y.view(batch_size, 1, *source.size()[2:])
         return y
@@ -189,22 +189,25 @@ class Generator(nn.Module, Track):
 
         weight = torch.bmm(theta_target, phi_source)        # (3, HW, HW)
         self.track("among bmm")
-        with torch.no_grad():
-            v = weight.detach().nonzero().long().permute(1, 0)
-            # This clone is required to correctly release cuda memory.
-            weight_ind = v.clone()
-            del v
-            torch.cuda.empty_cache()
+        # with torch.no_grad():
+        #     v = weight.detach().nonzero().long().permute(1, 0)
+        #     # This clone is required to correctly release cuda memory.
+        #     weight_ind = v.clone()
+        #     del v
+        #     torch.cuda.empty_cache()
+        weight_mask = (weight != 0)
 
         weight *= 200                                       # hyper parameters for visual feature
         weight = F.softmax(weight, dim=-1)
-        weight = weight[weight_ind[0], weight_ind[1], weight_ind[2]]
-        ret = torch.sparse.FloatTensor(weight_ind, weight, torch.Size([3, HW, HW]))
+        ret = weight * weight_mask
+        # weight = weight[weight_ind[0], weight_ind[1], weight_ind[2]]
+        # ret = torch.sparse.FloatTensor(weight_ind, weight, torch.Size([3, HW, HW]))
         self.track("after bmm")
         return ret
 
-    def forward(self, c, s, mask_c, mask_s, diff_c, diff_s, gamma=None, beta=None, ret=False):
-        c, s, mask_c, mask_s, diff_c, diff_s = [x.squeeze(0) if x.ndim == 5 else x for x in [c, s, mask_c, mask_s, diff_c, diff_s]]
+    def calc_gamma_beta(self, c, s, mask_c, mask_s, diff_c, diff_s):
+        c, s, mask_c, mask_s, diff_c, diff_s = [x.squeeze(0) if x.ndim == 5 else x for x in
+                                                [c, s, mask_c, mask_s, diff_c, diff_s]]
         """attention version
         c: content, stands for source image. shape: (b, c, h, w)
         s: style, stands for reference image. shape: (b, c, h, w)
@@ -220,7 +223,47 @@ class Generator(nn.Module, Track):
 
         # down-sampling
         for i in range(2):
-            if gamma is None:
+            cur_pnet_down = getattr(self, f'pnet_down_{i+1}')
+            s = cur_pnet_down(s)
+
+            cur_tnet_down_conv = getattr(self, f'tnet_down_conv_{i+1}')
+            cur_tnet_down_spade = getattr(self, f'tnet_down_spade_{i+1}')
+            cur_tnet_down_relu = getattr(self, f'tnet_down_relu_{i+1}')
+            c_tnet = cur_tnet_down_conv(c_tnet)
+            c_tnet = cur_tnet_down_spade(c_tnet)
+            c_tnet = cur_tnet_down_relu(c_tnet)
+        self.track("downsampling")
+
+        # get s_pnet from p and transform
+        s, gamma, beta = self.simple_spade(s)
+        weight = self.get_weight(mask_c, mask_s, c_tnet, s, diff_c, diff_s)
+        gamma, beta = self.atten_feature(mask_s, weight, gamma, beta, self.atten_bottleneck_g,
+                                         self.atten_bottleneck_b)
+        return gamma, beta
+
+
+    def forward(self, c, s, mask_c, mask_s, diff_c, diff_s):
+        c, s, mask_c, mask_s, diff_c, diff_s = [x.squeeze(0) if x.ndim == 5 else x for x in
+                                                [c, s, mask_c, mask_s, diff_c, diff_s]]
+        """attention version
+        c: content, stands for source image. shape: (b, c, h, w)
+        s: style, stands for reference image. shape: (b, c, h, w)
+        mask_list_c: lip, skin, eye. (b, 1, h, w)
+        """
+
+        if not self.training:
+            gamma, beta = self.calc_gamma_beta(c, s, mask_c, mask_s, diff_c, diff_s)
+
+        self.track("start")
+        # forward c in tnet(MANet)
+        c_tnet = self.tnet_in_conv(c)
+        s = self.pnet_in(s)
+        c_tnet = self.tnet_in_spade(c_tnet)
+        c_tnet = self.tnet_in_relu(c_tnet)
+
+        # down-sampling
+        for i in range(2):
+            if self.training:
                 cur_pnet_down = getattr(self, f'pnet_down_{i+1}')
                 s = cur_pnet_down(s)
 
@@ -234,24 +277,23 @@ class Generator(nn.Module, Track):
 
         # bottleneck
         for i in range(6):
-            if gamma is None and i <= 2:
+            if self.training and i <= 2:
                 cur_pnet_bottleneck = getattr(self, f'pnet_bottleneck_{i+1}')
             cur_tnet_bottleneck = getattr(self, f'tnet_bottleneck_{i+1}')
 
             # get s_pnet from p and transform
             if i == 3:
-                if gamma is None:               # not in test_mix
+                if self.training:  # not in test_mix
                     s, gamma, beta = self.simple_spade(s)
                     weight = self.get_weight(mask_c, mask_s, c_tnet, s, diff_c, diff_s)
                     gamma, beta = self.atten_feature(mask_s, weight, gamma, beta, self.atten_bottleneck_g, self.atten_bottleneck_b)
-                    if ret:
-                        return [gamma, beta]
+
                 # else:                       # in test mode
                     # gamma, beta = param_A[0]*w + param_B[0]*(1-w), param_A[1]*w + param_B[1]*(1-w)
 
                 c_tnet = c_tnet * (1 + gamma) + beta    # apply makeup transfer using makeup matrices
 
-            if gamma is None and i <= 2:
+            if self.training and i <= 2:
                 s = cur_pnet_bottleneck(s)
             c_tnet = cur_tnet_bottleneck(c_tnet)
         self.track("bottleneck")
@@ -268,7 +310,6 @@ class Generator(nn.Module, Track):
 
         c_tnet = self.tnet_out(c_tnet)
         return c_tnet
-
 
 class Discriminator(nn.Module):
     """Discriminator. PatchGAN."""

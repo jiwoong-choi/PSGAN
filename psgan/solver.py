@@ -155,7 +155,7 @@ class Solver(Track):
             self.D_B.load_state_dict(torch.load(D_B_path))
             print('loaded trained discriminator B {}..!'.format(D_B_path))
 
-    def generate(self, org_A, ref_B, lms_A=None, lms_B=None, mask_A=None, mask_B=None, 
+    def generate(self, org_A, ref_B, lms_A=None, lms_B=None, mask_A=None, mask_B=None,
                  diff_A=None, diff_B=None, gamma=None, beta=None, ret=False):
         """org_A is content, ref_B is style"""
         res = self.G(org_A, ref_B, mask_A, mask_B, diff_A, diff_B, gamma, beta, ret)
@@ -167,10 +167,11 @@ class Solver(Track):
     def test(self, real_A, mask_A, diff_A, real_B, mask_B, diff_B):
         cur_prama = None
         with torch.no_grad():
-            cur_prama = self.generate(real_A, real_B, None, None, mask_A, mask_B, 
-                                      diff_A, diff_B, ret=True)
-            fake_A = self.generate(real_A, real_B, None, None, mask_A, mask_B, 
-                                   diff_A, diff_B, gamma=cur_prama[0], beta=cur_prama[1])
+            fake_A = self.G(real_A, real_B, mask_A, mask_B, diff_A, diff_B)
+            # cur_prama = self.generate(real_A, real_B, None, None, mask_A, mask_B,
+            #                           diff_A, diff_B, ret=True)
+            # fake_A = self.generate(real_A, real_B, None, None, mask_A, mask_B,
+            #                        diff_A, diff_B, gamma=cur_prama[0], beta=cur_prama[1])
         fake_A = fake_A.squeeze(0)
 
         # normalize
@@ -191,7 +192,7 @@ class Solver(Track):
             for self.i, (source_input, reference_input) in enumerate(self.data_loader_train):
                 # image, mask, dist
                 image_s, image_r = source_input[0].to(self.device), reference_input[0].to(self.device)
-                mask_s, mask_r = source_input[1].to(self.device), reference_input[1].to(self.device) 
+                mask_s, mask_r = source_input[1].to(self.device), reference_input[1].to(self.device)
                 dist_s, dist_r = source_input[2].to(self.device), reference_input[2].to(self.device)
                 self.track("data")
 
@@ -243,12 +244,12 @@ class Solver(Track):
                 self.loss['D-B-loss_real'] = d_loss_real.mean().item()
 
                 # self.track("Discriminator backward")
-               
+
                 # ================== Train G ================== #
                 if (self.i + 1) % self.g_step == 0:
                     # identity loss
                     assert self.lambda_idt > 0
-                    
+
                     # G should be identity if ref_B or org_A is fed
                     idt_A = self.G(image_s, image_s, mask_s, mask_s, dist_s, dist_s)
                     idt_B = self.G(image_r, image_r, mask_r, mask_r, dist_r, dist_r)
@@ -349,16 +350,15 @@ class Solver(Track):
 
                     self.loss['G-A-loss-his'] = g_A_loss_his.mean().item()
 
-
                 # Print out log info
                 if (self.i + 1) % self.log_step == 0:
                     self.log_terminal()
 
-                #plot the figures
+                # plot the figures
                 for key_now in self.loss.keys():
                     plot_fig.plot(key_now, self.loss[key_now])
 
-                #save the images
+                # save the images
                 if (self.i) % self.vis_step == 0:
                     print("Saving middle output...")
                     self.vis_train([image_s, image_r, fake_A, rec_A, mask_s[:, :, 0], mask_r[:, :, 0]])
