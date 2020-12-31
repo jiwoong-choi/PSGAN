@@ -20,10 +20,12 @@ from concern.track import Track
 class ResidualBlock(nn.Module):
     """Residual Block."""
     def __init__(self, dim_in, dim_out, net_mode=None):
-        if net_mode == 'p' or (net_mode is None):
-            use_affine = True
-        elif net_mode == 't':
-            use_affine = False
+        # if net_mode == 'p' or (net_mode is None):
+        #     use_affine = True
+        # elif net_mode == 't':
+        #     use_affine = False
+        # PopTorch currently supports affine=True only
+        use_affine = True
         super(ResidualBlock, self).__init__()
         self.main = nn.Sequential(
             nn.Conv2d(dim_in, dim_out, kernel_size=3, stride=1, padding=1, bias=False),
@@ -107,14 +109,18 @@ class Generator(nn.Module, Track):
         # --------------------------- TNet(MANet) for applying makeup transfer ----------------------------
 
         self.tnet_in_conv = nn.Conv2d(3, 64, kernel_size=7, stride=1, padding=3, bias=False)
-        self.tnet_in_spade = nn.InstanceNorm2d(64, affine=False)
+        # PopTorch currently supports affine=True only
+        # self.tnet_in_spade = nn.InstanceNorm2d(64, affine=False)
+        self.tnet_in_spade = nn.InstanceNorm2d(64, affine=True)
         self.tnet_in_relu = nn.ReLU(inplace=True)
 
         # Down-Sampling
         curr_dim = 64
         for i in range(2):
             setattr(self, f'tnet_down_conv_{i+1}', nn.Conv2d(curr_dim, curr_dim * 2, kernel_size=4, stride=2, padding=1, bias=False))
-            setattr(self, f'tnet_down_spade_{i+1}', nn.InstanceNorm2d(curr_dim * 2, affine=False))
+            # PopTorch currently supports affine=True only
+            # setattr(self, f'tnet_down_spade_{i+1}', nn.InstanceNorm2d(curr_dim * 2, affine=False))
+            setattr(self, f'tnet_down_spade_{i + 1}', nn.InstanceNorm2d(curr_dim * 2, affine=True))
             setattr(self, f'tnet_down_relu_{i+1}', nn.ReLU(inplace=True))
             curr_dim = curr_dim * 2
 
@@ -125,7 +131,9 @@ class Generator(nn.Module, Track):
         # Up-Sampling
         for i in range(2):
             setattr(self, f'tnet_up_conv_{i+1}', nn.ConvTranspose2d(curr_dim, curr_dim // 2, kernel_size=4, stride=2, padding=1, bias=False))
-            setattr(self, f'tnet_up_spade_{i+1}', nn.InstanceNorm2d(curr_dim // 2, affine=False))
+            # PopTorch currently supports affine=True only
+            # setattr(self, f'tnet_up_spade_{i+1}', nn.InstanceNorm2d(curr_dim // 2, affine=False))
+            setattr(self, f'tnet_up_spade_{i + 1}', nn.InstanceNorm2d(curr_dim // 2, affine=True))
             setattr(self, f'tnet_up_relu_{i+1}', nn.ReLU(inplace=True))
             curr_dim = curr_dim // 2
 
