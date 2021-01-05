@@ -38,11 +38,14 @@ def main(save_path='transferred_image.png'):
 
     args = parser.parse_args()
     config = setup_config(args)
+    opts = poptorch.Options()
+    opts.setExecutionStrategy(poptorch.ShardedExecution())
+    # opts.deviceIterations(4)
 
     # Using the second cpu
     inference = Inference(
         config, args.device, args.model_path)
-    inference.solver.G = poptorch.inferenceModel(inference.solver.G)
+    inference.solver.G = poptorch.inferenceModel(inference.solver.G, opts)
     postprocess = PostProcess(config)
 
     source = Image.open(args.source_path).convert("RGB")
